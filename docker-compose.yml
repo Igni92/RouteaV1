@@ -1,0 +1,87 @@
+version: '3.9'
+
+services:
+  # PostgreSQL (local dev — production uses Supabase)
+  postgres:
+    image: postgres:15-alpine
+    container_name: gervifrais_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: gervifrais
+      POSTGRES_USER: gervifrais_user
+      POSTGRES_PASSWORD: gervifrais_dev_password
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/src/db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U gervifrais_user -d gervifrais']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis (GPS cache + sessions)
+  redis:
+    image: redis:7-alpine
+    container_name: gervifrais_redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    command: redis-server --appendonly yes --requirepass gervifrais_redis_dev
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', '-a', 'gervifrais_redis_dev', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: gervifrais_backend
+    restart: unless-stopped
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://gervifrais_user:gervifrais_dev_password@postgres:5432/gervifrais
+      REDIS_URL: redis://:gervifrais_redis_dev@redis:6379
+    env_file:
+      - ./backend/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend/src:/app/src
+      - ./shared:/app/shared
+    command: npm run dev
+
+  # Frontend Manager Dashboard
+  frontend-manager:
+    build:
+      context: ./frontend-manager
+      dockerfile: Dockerfile
+    container_name: gervifrais_manager
+    restart: unless-stopped
+    ports:
+      - '5173:5173'
+    environment:
+      VITE_API_URL: http://localhost:3000
+      VITE_WS_URL: ws://localhost:3000
+    env_file:
+      - ./frontend-manager/.env
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend-manager/src:/app/src
+      - ./shared:/app/shared
+
+volumes:
+  postgres_data:
+  redis_data:
